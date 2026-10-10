@@ -13,23 +13,23 @@ import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import androidx.media3.common.Effects
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.effect.ScaleAndRotateTransformation
+import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlin.math.max
 import kotlin.math.min
 
@@ -45,21 +45,17 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
         val uris = inputData.getStringArray(KEY_URIS)?.map(Uri::parse).orEmpty()
         val preset = inputData.getInt(KEY_PRESET, 1)
         if (uris.isEmpty()) return Result.failure()
-
         createChannel()
         setForeground(makeForeground(0, "압축 준비 중…"))
 
         val total = uris.size
         uris.forEachIndexed { index, uri ->
             if (isStopped) return Result.failure()
-            val name = displayName(uri)
-            val stageBase = index * 100 / total
-            updateNotification(stageBase, "${index + 1}/$total · $name")
             try {
                 compressOne(uri, preset, index, total)
             } catch (e: Exception) {
-                updateNotification(stageBase, "실패 · $name")
-                return Result.failure(androidx.work.workDataOf("error" to (e.message ?: "알 수 없는 오류")))
+                updateNotification(index * 100 / total, "실패 · ${displayName(uri)}")
+                return Result.failure(workDataOf("error" to (e.message ?: "알 수 없는 오류")))
             }
         }
         updateNotification(100, "압축 완료")
@@ -68,16 +64,17 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
 
     private suspend fun compressOne(uri: Uri, preset: Int, index: Int, total: Int) {
         val meta = readMeta(uri)
-        val originalBytes = meta.size
         val durationMs = max(1L, meta.durationMs)
+        val originalBytes = max(1L, meta.size)
         val ratio = when (preset) { 0 -> 0.35; 1 -> 0.50; else -> 0.65 }
-        val maxLongEdge = when (preset) { 0 -> 1280; else -> 1920 }
+        val maxLongEdge = if (preset == 0) 1280 else 1920
 
+        // Estimate a video bitrate from the requested size. The result is approximate because
+        // VBR encoding, codec overhead and the source audio bitrate vary by file.
         val targetBytes = max(2L * 1024L * 1024L, (originalBytes * ratio).toLong())
         val audioBits = durationMs / 1000.0 * 128_000.0
-        val desiredVideoBits = targetBytes * 8.0 - audioBits
-        val rawBitrate = (desiredVideoBits / (durationMs / 1000.0)).toInt()
-        val maxBitrate = when (preset) { 0 -> 4_000_000; 1 -> 8_000_000; else -> 12_000_000 }
+        val rawBitrate = ((targetBytes * 8.0 - audioBits) / (durationMs / 1000.0)).toInt()
+        val maxBitrate = if (preset == 0) 4_000_000 else if (preset == 1) 8_000_000 else 12_000_000
         val bitrate = min(maxBitrate, max(500_000, rawBitrate))
 
         val scale = if (max(meta.width, meta.height) > maxLongEdge) {
@@ -99,53 +96,44 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
                 .setRequestedVideoEncoderSettings(settings)
                 .build()
 
-            val videoEffects = if (scale < 0.999f) {
+            val effects = if (scale < 0.999f) {
                 listOf(ScaleAndRotateTransformation.Builder().setScale(scale, scale).build())
             } else emptyList()
 
             val edited = EditedMediaItem.Builder(MediaItem.fromUri(uri))
-                .setEffects(Effects(emptyList(), videoEffects))
+                .setEffects(Effects(emptyList(), effects))
                 .build()
 
+            val done = CompletableDeferred<Unit>()
             val transformer = Transformer.Builder(applicationContext)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setEncoderFactory(encoderFactory)
                 .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: androidx.media3.transformer.Composition, result: Transformer.ExportResult) {}
-                    override fun onError(composition: androidx.media3.transformer.Composition, result: Transformer.ExportResult, exception: ExportException) {}
+                    override fun onCompleted(composition: Composition, result: Transformer.ExportResult) {
+                        if (!done.isCompleted) done.complete(Unit)
+                    }
+                    override fun onError(composition: Composition, result: Transformer.ExportResult, exception: ExportException) {
+                        if (!done.isCompleted) done.completeExceptionally(exception)
+                    }
                 })
                 .build()
 
-            val completion = suspendCancellableCoroutine<Unit> { cont ->
-                val listener = object : Transformer.Listener {
-                    override fun onCompleted(composition: androidx.media3.transformer.Composition, result: Transformer.ExportResult) {
-                        if (cont.isActive) cont.resume(Unit)
-                    }
-                    override fun onError(composition: androidx.media3.transformer.Composition, result: Transformer.ExportResult, exception: ExportException) {
-                        if (cont.isActive) cont.resumeWithException(exception)
-                    }
-                }
-                transformer.addListener(listener)
-                transformer.start(edited, temp.absolutePath)
-                cont.invokeOnCancellation { runCatching { transformer.cancel() } }
-            }
-
+            transformer.start(edited, temp.absolutePath)
             val holder = ProgressHolder()
-            while (true) {
+            while (!done.isCompleted) {
                 if (isStopped) {
                     transformer.cancel()
                     return@withContext
                 }
-                val state = transformer.getProgress(holder)
-                if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                if (transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
                     val local = holder.progress.coerceIn(0, 100)
-                    val overall = ((index * 100) + local) / total
+                    val overall = (index * 100 + local) / total
+                    setProgress(workDataOf("progress" to overall, "file" to displayName(uri), "fileProgress" to local))
                     updateNotification(overall, "${index + 1}/$total · ${displayName(uri)} · $local%")
                 }
-                if (temp.exists() && temp.length() > 0 && !completion.isCompleted) delay(350)
-                else break
+                delay(350)
             }
-            completion
+            done.await()
         }
 
         if (!temp.exists() || temp.length() == 0L) throw IllegalStateException("출력 파일이 생성되지 않았습니다.")
