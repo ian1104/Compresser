@@ -5,11 +5,12 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -25,15 +26,21 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build release APK
-        run: gradle assembleRelease --no-daemon --stacktrace
+      - name: Build installable debug APK
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Locate APK
-        run: find app/build/outputs -type f -name "*.apk" -print
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
 
-      - name: Upload APK
+      - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Compresser-release
-          path: app/build/outputs/**/*.apk
+          name: Compresser-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
