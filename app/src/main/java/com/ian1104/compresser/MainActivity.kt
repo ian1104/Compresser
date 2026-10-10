@@ -15,7 +15,6 @@ import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -48,11 +47,8 @@ class MainActivity : AppCompatActivity() {
         if (uris.isEmpty()) return@registerForActivityResult
         selectedUris.clear()
         selectedUris.addAll(uris)
-        uris.forEach { uri ->
-            runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        }
-        selectedText.text = "선택한 영상 ${uris.size}개 · 총 ${formatBytes(uris.sumOf { querySize(it) })}\n" +
-            uris.take(4).joinToString("\n") { displayName(it) } + if (uris.size > 4) "\n…" else ""
+        uris.forEach { uri -> runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+        selectedText.text = "선택한 영상 ${uris.size}개 · 총 ${formatBytes(uris.sumOf { querySize(it) })}\n" + uris.take(4).joinToString("\n") { displayName(it) } + if (uris.size > 4) "\n…" else ""
         updateEstimate()
         startButton.isEnabled = true
     }
@@ -64,10 +60,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(28, 32, 28, 24)
-        }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 32, 28, 24) }
         val title = TextView(this).apply { text = "Compresser"; textSize = 30f; gravity = Gravity.CENTER }
         val subtitle = TextView(this).apply { text = "하드웨어 가속 기반 영상 압축"; textSize = 14f; gravity = Gravity.CENTER }
         val pickButton = Button(this).apply { text = "영상 선택 · 여러 개 가능"; setOnClickListener { picker.launch(arrayOf("video/*")) } }
@@ -109,7 +102,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(qualityLabel, LinearLayout.LayoutParams(-1, 32))
         root.addView(qualityValue, LinearLayout.LayoutParams(-1, 38))
         root.addView(qualityBar, LinearLayout.LayoutParams(-1, 48))
-        root.addView(detailText, LinearLayout.LayoutParams(-1, 76))
+        root.addView(detailText, LinearLayout.LayoutParams(-1, 110))
         root.addView(estimateText, LinearLayout.LayoutParams(-1, 52))
         root.addView(resolutionSpinner, LinearLayout.LayoutParams(-1, 54))
         root.addView(codecSpinner, LinearLayout.LayoutParams(-1, 54))
@@ -126,42 +119,46 @@ class MainActivity : AppCompatActivity() {
     private fun updateQualityText(value: Int) {
         val q = value.coerceIn(1, 100)
         qualityValue.text = "$q / 100"
-        val ratio = 15 + (q - 1) * 75 / 99
+        val ratio = 15.0 + (q - 1) * 75.0 / 99.0
         val resolution = when {
-            q <= 20 -> "최대 480p급"
-            q <= 50 -> "최대 720p급"
-            q <= 80 -> "최대 1080p급"
-            else -> "원본 유지 우선 · 최대 4K"
+            q <= 20 -> "480p급 이하로 적극 축소"
+            q <= 50 -> "720p급까지 허용"
+            q <= 80 -> "1080p급까지 허용"
+            else -> "원본 해상도 우선, 최대 4K"
         }
         val bitrate = when {
-            q <= 20 -> "약 0.35~1.5 Mbps"
-            q <= 50 -> "약 0.8~4 Mbps"
-            q <= 80 -> "약 2~8 Mbps"
-            else -> "약 4~16 Mbps"
+            q <= 20 -> "약 0.35~1.5 Mbps 상한"
+            q <= 50 -> "약 0.8~4 Mbps 상한"
+            q <= 80 -> "약 2~8 Mbps 상한"
+            else -> "약 4~16 Mbps 상한"
         }
-        detailText.text = "예상 용량: 원본의 약 $ratio%\n해상도: $resolution\n영상 비트레이트: $bitrate · VBR / 오디오는 AAC 계열로 처리"
+        val quality = when {
+            q <= 20 -> "화질 손실 큼 · 용량 최소화"
+            q <= 50 -> "화질/용량 균형"
+            q <= 80 -> "화질 우선"
+            else -> "화질 손실 최소화"
+        }
+        detailText.text = "현재 목표: 원본의 약 ${ratio.toInt()}%\n$quality\n해상도: $resolution\n비트레이트: $bitrate · VBR\n오디오: 기본 AAC 계열 처리 · 실제 결과 크기는 영상 내용에 따라 달라짐"
     }
 
     private fun updateEstimate() {
         if (!::estimateText.isInitialized || selectedUris.isEmpty()) return
         val original = selectedUris.sumOf { querySize(it) }
         val q = qualityBar.progress + 1
-        val ratio = (15 + (q - 1) * 75 / 99) / 100.0
+        val ratio = (15.0 + (q - 1) * 75.0 / 99.0) / 100.0
         val estimated = (original * ratio).toLong()
         val reduction = max(0.0, (1.0 - ratio) * 100.0)
-        estimateText.text = "예상 결과: ${formatBytes(estimated)} · 약 ${reduction.toInt()}% 감소"
+        estimateText.text = "예상 결과: ${formatBytes(estimated)} · 약 ${reduction.toInt()}% 감소\n※ 1-pass 인코딩 특성상 실제 크기는 오차가 있을 수 있음"
     }
 
     private fun startCompression() {
         if (selectedUris.isEmpty()) return
-        val request = OneTimeWorkRequestBuilder<CompressionWorker>()
-            .setInputData(workDataOf(
-                CompressionWorker.KEY_URIS to selectedUris.map(Uri::toString).toTypedArray(),
-                CompressionWorker.KEY_QUALITY to (qualityBar.progress + 1),
-                CompressionWorker.KEY_RESOLUTION to resolutionSpinner.selectedItemPosition,
-                CompressionWorker.KEY_CODEC to codecSpinner.selectedItemPosition
-            ))
-            .build()
+        val request = OneTimeWorkRequestBuilder<CompressionWorker>().setInputData(workDataOf(
+            CompressionWorker.KEY_URIS to selectedUris.map(Uri::toString).toTypedArray(),
+            CompressionWorker.KEY_QUALITY to (qualityBar.progress + 1),
+            CompressionWorker.KEY_RESOLUTION to resolutionSpinner.selectedItemPosition,
+            CompressionWorker.KEY_CODEC to codecSpinner.selectedItemPosition
+        )).build()
         workId = request.id
         WorkManager.getInstance(this).enqueue(request)
         startButton.isEnabled = false
@@ -226,12 +223,10 @@ class MainActivity : AppCompatActivity() {
     private fun formatBytes(bytes: Long): String {
         if (bytes < 1024) return "$bytes B"
         val units = arrayOf("KB", "MB", "GB", "TB")
-        var value = bytes.toDouble()
-        var i = -1
+        var value = bytes.toDouble(); var i = -1
         do { value /= 1024.0; i++ } while (value >= 1024 && i < units.lastIndex)
         return String.format(Locale.US, "%.1f %s", value, units[i])
     }
-
     private class SimpleItemSelected(private val action: () -> Unit) : android.widget.AdapterView.OnItemSelectedListener {
         override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) = action()
         override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
