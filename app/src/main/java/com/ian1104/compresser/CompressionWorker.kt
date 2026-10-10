@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -69,8 +70,6 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
         val ratio = when (preset) { 0 -> 0.35; 1 -> 0.50; else -> 0.65 }
         val maxLongEdge = if (preset == 0) 1280 else 1920
 
-        // Estimate a video bitrate from the requested size. The result is approximate because
-        // VBR encoding, codec overhead and the source audio bitrate vary by file.
         val targetBytes = max(2L * 1024L * 1024L, (originalBytes * ratio).toLong())
         val audioBits = durationMs / 1000.0 * 128_000.0
         val rawBitrate = ((targetBytes * 8.0 - audioBits) / (durationMs / 1000.0)).toInt()
@@ -210,9 +209,11 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
             .setProgress(100, progress, progress <= 0)
             .setOngoing(true)
             .build()
-        return if (Build.VERSION.SDK_INT >= 29) {
-            ForegroundInfo(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else ForegroundInfo(NOTIFICATION_ID, notification)
+        return when {
+            Build.VERSION.SDK_INT >= 35 -> ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING)
+            Build.VERSION.SDK_INT >= 29 -> ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            else -> ForegroundInfo(NOTIFICATION_ID, notification)
+        }
     }
 
     private suspend fun updateNotification(progress: Int, text: String) {
