@@ -1,12 +1,15 @@
 package com.ian1104.compresser
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.view.Gravity
 import android.view.View
@@ -22,10 +25,13 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.max
 
@@ -56,18 +62,7 @@ class MainActivity : AppCompatActivity() {
 
     private val picker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@registerForActivityResult
-        selectedUris.clear()
-        selectedUris.addAll(uris)
-        uris.forEach { uri ->
-            runCatching {
-                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-        }
-        selectedText.text = "${uris.size}개 선택됨  ·  ${formatBytes(uris.sumOf { querySize(it) })}\n" +
-            uris.take(3).joinToString("\n") { "• ${displayName(it)}" } +
-            if (uris.size > 3) "\n• 외 ${uris.size - 3}개" else ""
-        updateEstimate()
-        startButton.isEnabled = true
+        applySelectedUris(uris)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -130,11 +125,11 @@ class MainActivity : AppCompatActivity() {
         }
         sourceCard.addView(label("VIDEO", 11f))
         val pickButton = Button(this).apply {
-            text = "영상 선택"
+            text = "영상 선택 · 최근 추가순"
             textSize = 15f
             setTextColor(this@MainActivity.text)
             background = cardBackground(card2)
-            setOnClickListener { picker.launch(arrayOf("video/*")) }
+            setOnClickListener { openRecentVideoPicker() }
         }
         sourceCard.addView(pickButton, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(10) })
         selectedText = TextView(this).apply {
@@ -247,6 +242,112 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(root)
         setContentView(scroll)
         updateQualityText(50)
+    }
+
+    private fun openRecentVideoPicker() {
+        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_VIDEO else Manifest.permission.READ_EXTERNAL_STORAGE
+        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(permission), 20)
+            return
+        }
+        showRecentVideos()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 20) {
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) showRecentVideos()
+            else picker.launch(arrayOf("video/*"))
+        }
+    }
+
+    private data class VideoItem(val uri: Uri, val name: String, val size: Long, val addedSeconds: Long)
+
+    private fun loadRecentVideos(): List<VideoItem> {
+        val result = mutableListOf<VideoItem>()
+        val collection = if (Build.VERSION.SDK_INT >= 29) {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        } else {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        }
+        val projection = arrayOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DATE_ADDED
+        )
+        contentResolver.query(
+            collection,
+            projection,
+            null,
+            null,
+            "${MediaStore.Video.Media.DATE_ADDED} DESC"
+        )?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+            val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+            val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+            val addedIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
+            while (cursor.moveToNext() && result.size < 100) {
+                val id = cursor.getLong(idIndex)
+                result += VideoItem(
+                    contentResolver.buildVideoUri(collection, id),
+                    cursor.getString(nameIndex) ?: "video",
+                    cursor.getLong(sizeIndex),
+                    cursor.getLong(addedIndex)
+                )
+            }
+        }
+        return result
+    }
+
+    private fun ContentResolver.buildVideoUri(collection: Uri, id: Long): Uri = Uri.withAppendedPath(collection, id.toString())
+
+    private fun showRecentVideos() {
+        val videos = runCatching { loadRecentVideos() }.getOrElse {
+            Toast.makeText(this, "영상 목록을 불러오지 못했습니다.", Toast.LENGTH_SHORT).show()
+            picker.launch(arrayOf("video/*"))
+            return
+        }
+        if (videos.isEmpty()) {
+            Toast.makeText(this, "기기에 영상이 없습니다.", Toast.LENGTH_SHORT).show()
+            picker.launch(arrayOf("video/*"))
+            return
+        }
+
+        val rows = videos.map {
+            "${it.name}\n${formatBytes(it.size)}  ·  ${formatAddedDate(it.addedSeconds)}"
+        }.toTypedArray()
+        val checked = BooleanArray(videos.size) { selectedUris.contains(videos[it].uri) }
+
+        AlertDialog.Builder(this)
+            .setTitle("영상 선택")
+            .setMessage("최근 추가된 영상부터 표시합니다 · 최대 100개")
+            .setMultiChoiceItems(rows, checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setNegativeButton("취소", null)
+            .setPositiveButton("선택") { _, _ ->
+                val uris = videos.indices.filter { checked[it] }.map { videos[it].uri }
+                if (uris.isNotEmpty()) applySelectedUris(uris) else selectedText.text = "선택한 영상이 없습니다."
+            }
+            .show()
+    }
+
+    private fun formatAddedDate(seconds: Long): String {
+        return SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.KOREA).format(Date(seconds * 1000L))
+    }
+
+    private fun applySelectedUris(uris: List<Uri>) {
+        selectedUris.clear()
+        selectedUris.addAll(uris)
+        uris.forEach { uri ->
+            runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        }
+        selectedText.text = "${uris.size}개 선택됨  ·  ${formatBytes(uris.sumOf { querySize(it) })}\n" +
+            uris.take(3).joinToString("\n") { "• ${displayName(it)}" } +
+            if (uris.size > 3) "\n• 외 ${uris.size - 3}개" else ""
+        updateEstimate()
+        startButton.isEnabled = true
     }
 
     private fun makeSpinner(items: Array<String>, onSelected: () -> Unit): Spinner = Spinner(this).apply {
