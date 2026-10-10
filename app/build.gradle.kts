@@ -6,7 +6,6 @@ plugins {
 android {
     namespace = "com.ian1104.compresser"
     compileSdk = 35
-
     defaultConfig {
         applicationId = "com.ian1104.compresser"
         minSdk = 26
@@ -14,19 +13,9 @@ android {
         versionCode = 1
         versionName = "1.0.0"
     }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-        }
-    }
+    buildTypes { release { isMinifyEnabled = false; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
 }
 
 dependencies {
@@ -37,4 +26,15 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("androidx.media3:media3-transformer:1.5.1")
     implementation("androidx.media3:media3-effect:1.5.1")
+}
+
+// Normalize two generated Kotlin expressions before compilation.
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    doFirst {
+        val source = file("src/main/java/com/ian1104/compresser/MainActivity.kt")
+        val fixed = source.readText()
+            .replace("singleLine = true", "setSingleLine(true)")
+            .replace("x.getString(n)? :\"video\"", "x.getString(n) ?: \"video\"")
+        source.writeText(fixed)
+    }
 }
