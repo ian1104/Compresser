@@ -20,7 +20,7 @@ class HistoryActivity : AppCompatActivity() {
     private val bg = Color.rgb(13, 15, 18)
     private val card = Color.rgb(23, 26, 31)
     private val card2 = Color.rgb(29, 33, 39)
-    private val text = Color.rgb(242, 244, 247)
+    private val primaryText = Color.rgb(242, 244, 247)
     private val muted = Color.rgb(157, 165, 176)
     private val accent = Color.rgb(105, 170, 255)
 
@@ -48,7 +48,7 @@ class HistoryActivity : AppCompatActivity() {
         header.addView(TextView(this).apply {
             text = "압축 기록"
             textSize = 26f
-            setTextColor(text)
+            setTextColor(primaryText)
             typeface = Typeface.DEFAULT_BOLD
         }, LinearLayout.LayoutParams(0, -2, 1f))
         header.addView(Button(this).apply {
@@ -101,7 +101,7 @@ class HistoryActivity : AppCompatActivity() {
             cardView.addView(TextView(this).apply {
                 text = "${entry.count}개 영상 · ${formatBytes(entry.originalBytes)} → ${formatBytes(entry.outputBytes)}"
                 textSize = 15f
-                setTextColor(text)
+                setTextColor(primaryText)
                 typeface = Typeface.DEFAULT_BOLD
                 setPadding(0, dp(7), 0, dp(4))
             })
@@ -115,7 +115,7 @@ class HistoryActivity : AppCompatActivity() {
                     text = "첫 결과 열기"
                     isAllCaps = false
                     textSize = 12f
-                    setTextColor(text)
+                    setTextColor(primaryText)
                     setBackgroundColor(card2)
                     setOnClickListener { openUri(entry.outputUris.first()) }
                 }, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(10) })
