@@ -137,8 +137,6 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
         if (temp.exists()) temp.delete()
 
         withContext(Dispatchers.Main.immediate) {
-            // Media3 1.5.1 accepts the requested bitrate directly. Avoid requesting
-            // a specific bitrate mode because some Android encoders reject it.
             val settings = VideoEncoderSettings.Builder()
                 .setBitrate(bitrate)
                 .build()
@@ -177,33 +175,38 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
                 })
                 .build()
 
-            transformer.start(edited, temp.absolutePath)
-            val holder = ProgressHolder()
+            try {
+                transformer.start(edited, temp.absolutePath)
+                val holder = ProgressHolder()
 
-            while (!done.isCompleted) {
-                if (isStopped) {
-                    transformer.cancel()
-                    return@withContext
-                }
+                while (!done.isCompleted) {
+                    if (isStopped) {
+                        transformer.cancel()
+                        break
+                    }
 
-                if (transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
-                    val local = holder.progress.coerceIn(0, 100)
-                    val overall = (index * 100 + local) / total
-                    setProgress(workDataOf(
-                        "progress" to overall,
-                        "file" to displayName(uri),
-                        "fileProgress" to local,
-                        "fileIndex" to index + 1,
-                        "fileTotal" to total,
-                        "targetRatio" to targetRatio
-                    ))
-                    updateNotification(overall, "${index + 1}/$total · ${displayName(uri)} · $local%")
+                    if (transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
+                        val local = holder.progress.coerceIn(0, 100)
+                        val overall = (index * 100 + local) / total
+                        setProgress(workDataOf(
+                            "progress" to overall,
+                            "file" to displayName(uri),
+                            "fileProgress" to local,
+                            "fileIndex" to index + 1,
+                            "fileTotal" to total,
+                            "targetRatio" to targetRatio
+                        ))
+                        updateNotification(overall, "${index + 1}/$total · ${displayName(uri)} · $local%")
+                    }
+                    delay(300)
                 }
-                delay(300)
+                done.await()
+            } finally {
+                if (!done.isCompleted) transformer.cancel()
             }
-            done.await()
         }
 
+        if (isStopped) throw IllegalStateException("작업이 취소되었습니다.")
         if (!temp.exists() || temp.length() == 0L) {
             throw IllegalStateException("출력 파일이 생성되지 않았습니다.")
         }
@@ -217,9 +220,12 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
         val base = originalName.substringBeforeLast('.', "video")
         val outputName = "${base}_compressed.mp4"
         val resolver = applicationContext.contentResolver
-        val collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val collection = if (Build.VERSION.SDK_INT >= 29) {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        }
 
-        // Re-compressing the same source replaces the previous deterministic output.
         resolver.query(
             collection,
             arrayOf(MediaStore.Video.Media._ID),
@@ -298,7 +304,7 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
             null,
             null
         )?.use { c ->
-            if (c.moveToFirst()) return c.getLong(0)
+            if (c.moveToFirst() && !c.isNull(0)) return c.getLong(0).coerceAtLeast(0L)
         }
         return 0L
     }
@@ -311,7 +317,7 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
             null,
             null
         )?.use { c ->
-            if (c.moveToFirst()) return c.getString(0)
+            if (c.moveToFirst() && !c.isNull(0)) return c.getString(0)
         }
         return "video.mp4"
     }
