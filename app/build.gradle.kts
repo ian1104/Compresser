@@ -28,13 +28,13 @@ dependencies {
     implementation("androidx.media3:media3-effect:1.5.1")
 }
 
-// Normalize two generated Kotlin expressions before compilation.
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
     doFirst {
         val source = file("src/main/java/com/ian1104/compresser/MainActivity.kt")
-        val fixed = source.readText()
+        source.writeText(source.readText()
+            .replace("singleLine=true", "setSingleLine(true)")
             .replace("singleLine = true", "setSingleLine(true)")
             .replace("x.getString(n)? :\"video\"", "x.getString(n) ?: \"video\"")
-        source.writeText(fixed)
+            .replace("x.getString(n)? : \"video\"", "x.getString(n) ?: \"video\""))
     }
 }
