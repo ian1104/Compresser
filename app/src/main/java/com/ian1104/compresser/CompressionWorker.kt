@@ -76,6 +76,14 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
             }
         }
 
+        CompressionHistory.add(applicationContext, HistoryEntry(
+            timestamp = System.currentTimeMillis(),
+            originalBytes = originalTotal,
+            outputBytes = outputTotal,
+            count = outputUris.size,
+            outputUris = outputUris.toList()
+        ))
+
         updateNotification(100, "압축 완료")
         return Result.success(workDataOf(
             KEY_OUTPUT_URIS to outputUris.toTypedArray(),
@@ -84,133 +92,56 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
         ))
     }
 
-    private data class CompressionResult(
-        val outputUri: Uri,
-        val originalBytes: Long,
-        val outputBytes: Long
-    )
+    private data class CompressionResult(val outputUri: Uri, val originalBytes: Long, val outputBytes: Long)
 
-    private suspend fun compressOne(
-        uri: Uri,
-        quality: Int,
-        resolution: Int,
-        codec: Int,
-        index: Int,
-        total: Int
-    ): CompressionResult {
+    private suspend fun compressOne(uri: Uri, quality: Int, resolution: Int, codec: Int, index: Int, total: Int): CompressionResult {
         val meta = readMeta(uri)
         val originalBytes = max(1L, meta.size)
         val durationSeconds = max(1.0, meta.durationMs / 1000.0)
         val targetRatio = 0.15 + (quality - 1) / 99.0 * 0.75
-
-        val qualityMaxLongEdge = when {
-            quality <= 20 -> 854
-            quality <= 50 -> 1280
-            quality <= 80 -> 1920
-            else -> 3840
-        }
-        val requestedMaxLongEdge = when (resolution) {
-            1 -> 854
-            2 -> 1280
-            3 -> 1920
-            4 -> 3840
-            else -> qualityMaxLongEdge
-        }
+        val qualityMaxLongEdge = when { quality <= 20 -> 854; quality <= 50 -> 1280; quality <= 80 -> 1920; else -> 3840 }
+        val requestedMaxLongEdge = when (resolution) { 1 -> 854; 2 -> 1280; 3 -> 1920; 4 -> 3840; else -> qualityMaxLongEdge }
         val maxLongEdge = min(qualityMaxLongEdge, requestedMaxLongEdge)
         val targetBytes = max(512L * 1024L, (originalBytes * targetRatio).toLong())
         val audioBits = durationSeconds * 128_000.0
         val rawBitrate = ((targetBytes * 8.0 - audioBits) / durationSeconds).toInt()
-        val maxBitrate = when {
-            quality <= 20 -> 1_500_000
-            quality <= 50 -> 4_000_000
-            quality <= 80 -> 8_000_000
-            else -> 16_000_000
-        }
+        val maxBitrate = when { quality <= 20 -> 1_500_000; quality <= 50 -> 4_000_000; quality <= 80 -> 8_000_000; else -> 16_000_000 }
         val bitrate = min(maxBitrate, max(350_000, rawBitrate))
-        val scale = if (max(meta.width, meta.height) > maxLongEdge) {
-            maxLongEdge.toFloat() / max(meta.width, meta.height).toFloat()
-        } else {
-            1f
-        }
-
+        val scale = if (max(meta.width, meta.height) > maxLongEdge) maxLongEdge.toFloat() / max(meta.width, meta.height).toFloat() else 1f
         val temp = File(applicationContext.cacheDir, "compress_${System.currentTimeMillis()}_$index.mp4")
         if (temp.exists()) temp.delete()
 
         withContext(Dispatchers.Main.immediate) {
-            val settings = VideoEncoderSettings.Builder()
-                .setBitrate(bitrate)
-                .build()
-
-            val encoderFactory = DefaultEncoderFactory.Builder(applicationContext)
-                .setEnableFallback(true)
-                .setRequestedVideoEncoderSettings(settings)
-                .build()
-
-            val videoEffects = if (scale < 0.999f) {
-                listOf(ScaleAndRotateTransformation.Builder().setScale(scale, scale).build())
-            } else {
-                emptyList()
-            }
-
-            val edited = EditedMediaItem.Builder(MediaItem.fromUri(uri))
-                .setEffects(Effects(emptyList(), videoEffects))
-                .build()
-
+            val settings = VideoEncoderSettings.Builder().setBitrate(bitrate).build()
+            val encoderFactory = DefaultEncoderFactory.Builder(applicationContext).setEnableFallback(true).setRequestedVideoEncoderSettings(settings).build()
+            val videoEffects = if (scale < 0.999f) listOf(ScaleAndRotateTransformation.Builder().setScale(scale, scale).build()) else emptyList()
+            val edited = EditedMediaItem.Builder(MediaItem.fromUri(uri)).setEffects(Effects(emptyList(), videoEffects)).build()
             val done = CompletableDeferred<Unit>()
             val transformer = Transformer.Builder(applicationContext)
                 .setVideoMimeType(if (codec == 1) MimeTypes.VIDEO_H265 else MimeTypes.VIDEO_H264)
                 .setEncoderFactory(encoderFactory)
                 .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, result: ExportResult) {
-                        if (!done.isCompleted) done.complete(Unit)
-                    }
-
-                    override fun onError(
-                        composition: Composition,
-                        result: ExportResult,
-                        exception: ExportException
-                    ) {
-                        if (!done.isCompleted) done.completeExceptionally(exception)
-                    }
-                })
-                .build()
-
+                    override fun onCompleted(composition: Composition, result: ExportResult) { if (!done.isCompleted) done.complete(Unit) }
+                    override fun onError(composition: Composition, result: ExportResult, exception: ExportException) { if (!done.isCompleted) done.completeExceptionally(exception) }
+                }).build()
             try {
                 transformer.start(edited, temp.absolutePath)
                 val holder = ProgressHolder()
-
                 while (!done.isCompleted) {
-                    if (isStopped) {
-                        transformer.cancel()
-                        break
-                    }
-
+                    if (isStopped) { transformer.cancel(); break }
                     if (transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
                         val local = holder.progress.coerceIn(0, 100)
                         val overall = (index * 100 + local) / total
-                        setProgress(workDataOf(
-                            "progress" to overall,
-                            "file" to displayName(uri),
-                            "fileProgress" to local,
-                            "fileIndex" to index + 1,
-                            "fileTotal" to total,
-                            "targetRatio" to targetRatio
-                        ))
+                        setProgress(workDataOf("progress" to overall, "file" to displayName(uri), "fileProgress" to local, "fileIndex" to index + 1, "fileTotal" to total, "targetRatio" to targetRatio))
                         updateNotification(overall, "${index + 1}/$total · ${displayName(uri)} · $local%")
                     }
                     delay(300)
                 }
                 done.await()
-            } finally {
-                if (!done.isCompleted) transformer.cancel()
-            }
+            } finally { if (!done.isCompleted) transformer.cancel() }
         }
-
         if (isStopped) throw IllegalStateException("작업이 취소되었습니다.")
-        if (!temp.exists() || temp.length() == 0L) {
-            throw IllegalStateException("출력 파일이 생성되지 않았습니다.")
-        }
-
+        if (!temp.exists() || temp.length() == 0L) throw IllegalStateException("출력 파일이 생성되지 않았습니다.")
         val output = publishToGallery(temp, displayName(uri))
         temp.delete()
         return CompressionResult(output, originalBytes, querySize(output))
@@ -220,147 +151,43 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
         val base = originalName.substringBeforeLast('.', "video")
         val outputName = "${base}_compressed.mp4"
         val resolver = applicationContext.contentResolver
-        val collection = if (Build.VERSION.SDK_INT >= 29) {
-            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        } else {
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val collection = if (Build.VERSION.SDK_INT >= 29) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        resolver.query(collection, arrayOf(MediaStore.Video.Media._ID), "${MediaStore.Video.Media.DISPLAY_NAME}=?", arrayOf(outputName), null)?.use { cursor ->
+            while (cursor.moveToNext()) resolver.delete(ContentUris.withAppendedId(collection, cursor.getLong(0)), null, null)
         }
-
-        resolver.query(
-            collection,
-            arrayOf(MediaStore.Video.Media._ID),
-            "${MediaStore.Video.Media.DISPLAY_NAME}=?",
-            arrayOf(outputName),
-            null
-        )?.use { cursor ->
-            while (cursor.moveToNext()) {
-                resolver.delete(
-                    ContentUris.withAppendedId(collection, cursor.getLong(0)),
-                    null,
-                    null
-                )
-            }
-        }
-
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, outputName)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            if (Build.VERSION.SDK_INT >= 29) {
-                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/Compresser")
-                put(MediaStore.Video.Media.IS_PENDING, 1)
-            }
+            if (Build.VERSION.SDK_INT >= 29) { put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/Compresser"); put(MediaStore.Video.Media.IS_PENDING, 1) }
         }
-
-        val outputUri = resolver.insert(collection, values)
-            ?: throw IllegalStateException("저장 위치를 만들 수 없습니다.")
-
+        val outputUri = resolver.insert(collection, values) ?: throw IllegalStateException("저장 위치를 만들 수 없습니다.")
         try {
-            resolver.openOutputStream(outputUri)?.use { out ->
-                temp.inputStream().use { it.copyTo(out) }
-            } ?: throw IllegalStateException("출력 파일을 저장할 수 없습니다.")
-
-            if (Build.VERSION.SDK_INT >= 29) {
-                resolver.update(
-                    outputUri,
-                    ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) },
-                    null,
-                    null
-                )
-            }
+            resolver.openOutputStream(outputUri)?.use { out -> temp.inputStream().use { it.copyTo(out) } } ?: throw IllegalStateException("출력 파일을 저장할 수 없습니다.")
+            if (Build.VERSION.SDK_INT >= 29) resolver.update(outputUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
             outputUri
-        } catch (e: Exception) {
-            resolver.delete(outputUri, null, null)
-            throw e
-        }
+        } catch (e: Exception) { resolver.delete(outputUri, null, null); throw e }
     }
 
-    private data class Meta(
-        val width: Int,
-        val height: Int,
-        val durationMs: Long,
-        val size: Long
-    )
-
+    private data class Meta(val width: Int, val height: Int, val durationMs: Long, val size: Long)
     private fun readMeta(uri: Uri): Meta {
         val r = MediaMetadataRetriever()
         return try {
             r.setDataSource(applicationContext, uri)
-            Meta(
-                r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 1920,
-                r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 1080,
-                r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 1,
-                querySize(uri)
-            )
-        } finally {
-            r.release()
-        }
+            Meta(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 1920, r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 1080, r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 1, querySize(uri))
+        } finally { r.release() }
     }
-
     private fun querySize(uri: Uri): Long {
-        applicationContext.contentResolver.query(
-            uri,
-            arrayOf(MediaStore.MediaColumns.SIZE),
-            null,
-            null,
-            null
-        )?.use { c ->
-            if (c.moveToFirst() && !c.isNull(0)) return c.getLong(0).coerceAtLeast(0L)
-        }
+        applicationContext.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.SIZE), null, null, null)?.use { c -> if (c.moveToFirst() && !c.isNull(0)) return c.getLong(0).coerceAtLeast(0L) }
         return 0L
     }
-
     private fun displayName(uri: Uri): String {
-        applicationContext.contentResolver.query(
-            uri,
-            arrayOf(MediaStore.MediaColumns.DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { c ->
-            if (c.moveToFirst() && !c.isNull(0)) return c.getString(0)
-        }
+        applicationContext.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst() && !c.isNull(0)) return c.getString(0) }
         return "video.mp4"
     }
-
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            applicationContext
-                .getSystemService(NotificationManager::class.java)
-                .createNotificationChannel(
-                    NotificationChannel(
-                        CHANNEL_ID,
-                        "Video compression",
-                        NotificationManager.IMPORTANCE_LOW
-                    )
-                )
-        }
-    }
-
+    private fun createChannel() { if (Build.VERSION.SDK_INT >= 26) applicationContext.getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "Video compression", NotificationManager.IMPORTANCE_LOW)) }
     private fun makeForeground(progress: Int, text: String): ForegroundInfo {
-        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("Compresser")
-            .setContentText(text)
-            .setProgress(100, progress, progress <= 0)
-            .setOngoing(true)
-            .build()
-
-        return when {
-            Build.VERSION.SDK_INT >= 35 -> ForegroundInfo(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
-            )
-            Build.VERSION.SDK_INT >= 29 -> ForegroundInfo(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
-            else -> ForegroundInfo(NOTIFICATION_ID, notification)
-        }
+        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("Compresser").setContentText(text).setProgress(100, progress, progress <= 0).setOngoing(true).build()
+        return when { Build.VERSION.SDK_INT >= 35 -> ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING); Build.VERSION.SDK_INT >= 29 -> ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC); else -> ForegroundInfo(NOTIFICATION_ID, notification) }
     }
-
-    private suspend fun updateNotification(progress: Int, text: String) {
-        setForeground(makeForeground(progress.coerceIn(0, 100), text))
-    }
+    private suspend fun updateNotification(progress: Int, text: String) { setForeground(makeForeground(progress.coerceIn(0, 100), text)) }
 }
