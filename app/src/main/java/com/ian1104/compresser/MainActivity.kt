@@ -112,7 +112,7 @@ class MainActivity : AppCompatActivity() {
         header.addView(TextView(this).apply {
             text = "Compresser"
             textSize = 30f
-            setTextColor(text)
+            setTextColor(this@MainActivity.text)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
         })
         header.addView(TextView(this).apply {
@@ -132,7 +132,7 @@ class MainActivity : AppCompatActivity() {
         val pickButton = Button(this).apply {
             text = "영상 선택"
             textSize = 15f
-            setTextColor(text)
+            setTextColor(this@MainActivity.text)
             background = cardBackground(card2)
             setOnClickListener { picker.launch(arrayOf("video/*")) }
         }
@@ -205,7 +205,7 @@ class MainActivity : AppCompatActivity() {
         resultCard.addView(label("RESULT", 11f))
         estimateText = TextView(this).apply {
             textSize = 13f
-            setTextColor(text)
+            setTextColor(this@MainActivity.text)
             setLineSpacing(0f, 1.15f)
         }
         resultCard.addView(estimateText, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
