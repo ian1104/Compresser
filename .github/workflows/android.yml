@@ -28,9 +28,12 @@ jobs:
       - name: Build release APK
         run: gradle assembleRelease --no-daemon --stacktrace
 
+      - name: Locate APK
+        run: find app/build/outputs -type f -name "*.apk" -print
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Compresser-release
-          path: app/build/outputs/apk/release/app-release.apk
+          path: app/build/outputs/**/*.apk
           if-no-files-found: error
