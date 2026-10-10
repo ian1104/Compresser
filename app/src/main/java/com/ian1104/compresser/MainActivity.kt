@@ -74,9 +74,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = bg
         window.navigationBarColor = bg
-        if (Build.VERSION.SDK_INT >= 23) {
-            window.decorView.systemUiVisibility = 0
-        }
+        if (Build.VERSION.SDK_INT >= 23) window.decorView.systemUiVisibility = 0
         if (Build.VERSION.SDK_INT >= 33) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
         }
@@ -154,9 +152,7 @@ class MainActivity : AppCompatActivity() {
             background = cardBackground()
             setPadding(dp(16), dp(16), dp(16), dp(16))
         }
-        val qualityHeader = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val qualityHeader = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         qualityHeader.addView(label("압축 강도", 16f), LinearLayout.LayoutParams(0, -2, 1f))
         qualityValue = TextView(this).apply {
             text = "50 / 100"
@@ -195,9 +191,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(16), dp(16), dp(16), dp(16))
         }
         optionsCard.addView(label("OPTIONS", 11f))
-        resolutionSpinner = makeSpinner(arrayOf("해상도 · 자동", "480p", "720p", "1080p", "최대 4K")) {
-            updateEstimate()
-        }
+        resolutionSpinner = makeSpinner(arrayOf("해상도 · 자동", "480p", "720p", "1080p", "최대 4K")) { updateEstimate() }
         codecSpinner = makeSpinner(arrayOf("H.264 · 호환성 우선", "H.265/HEVC · 용량 우선")) {}
         optionsCard.addView(resolutionSpinner, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
         optionsCard.addView(codecSpinner, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
@@ -241,9 +235,7 @@ class MainActivity : AppCompatActivity() {
         val actionRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         startButton = makeButton("압축 시작", accent, Color.rgb(10, 16, 24)) { startCompression() }
         startButton.isEnabled = false
-        cancelButton = makeButton("작업 취소", card2, text) {
-            workId?.let { WorkManager.getInstance(this@MainActivity).cancelWorkById(it) }
-        }
+        cancelButton = makeButton("작업 취소", card2, text) { workId?.let { WorkManager.getInstance(this@MainActivity).cancelWorkById(it) } }
         cancelButton.isEnabled = false
         shareButton = makeButton("완료 파일 공유", card2, text) { shareResults() }
         shareButton.isEnabled = false
@@ -263,7 +255,7 @@ class MainActivity : AppCompatActivity() {
             override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View = TextView(this@MainActivity).apply {
                 text = getItem(position)
                 textSize = 14f
-                setTextColor(text)
+                setTextColor(this@MainActivity.text)
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(14), 0, dp(14), 0)
             }
@@ -351,8 +343,7 @@ class MainActivity : AppCompatActivity() {
                     shareButton.isEnabled = lastOutputUris.isNotEmpty()
                     val before = info.outputData.getLong(CompressionWorker.KEY_ORIGINAL_BYTES, 0L)
                     val after = info.outputData.getLong(CompressionWorker.KEY_OUTPUT_BYTES, 0L)
-                    if (before > 0 && after > 0) "완료  ·  ${formatBytes(before)} → ${formatBytes(after)}  ·  약 ${(100.0 - after * 100.0 / before).toInt()}% 감소"
-                    else "완료  ·  Movies/Compresser에 저장됨"
+                    if (before > 0 && after > 0) "완료  ·  ${formatBytes(before)} → ${formatBytes(after)}  ·  약 ${(100.0 - after * 100.0 / before).toInt()}% 감소" else "완료  ·  Movies/Compresser에 저장됨"
                 }
                 WorkInfo.State.CANCELLED -> "취소됨"
                 WorkInfo.State.FAILED -> "실패  ·  ${info.outputData.getString(CompressionWorker.KEY_ERROR) ?: "알 수 없는 오류"}"
@@ -378,7 +369,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             Intent(Intent.ACTION_SEND_MULTIPLE).apply {
                 type = "video/mp4"
-                putExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         }
