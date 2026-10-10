@@ -23,6 +23,7 @@ import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
@@ -108,10 +109,10 @@ class CompressionWorker(appContext: Context, params: WorkerParameters) : Corouti
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setEncoderFactory(encoderFactory)
                 .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, result: Transformer.ExportResult) {
+                    override fun onCompleted(composition: Composition, result: ExportResult) {
                         if (!done.isCompleted) done.complete(Unit)
                     }
-                    override fun onError(composition: Composition, result: Transformer.ExportResult, exception: ExportException) {
+                    override fun onError(composition: Composition, result: ExportResult, exception: ExportException) {
                         if (!done.isCompleted) done.completeExceptionally(exception)
                     }
                 })
