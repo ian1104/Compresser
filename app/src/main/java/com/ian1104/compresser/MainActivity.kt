@@ -105,7 +105,6 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(18), dp(20), dp(28))
         }
-
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(4), dp(4), dp(4), dp(18))
@@ -293,7 +292,6 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle("최근 추가된 영상")
-            .setMessage("최신 추가 순 · 최대 100개")
             .setMultiChoiceItems(rows, checked) { _, which, isChecked -> checked[which] = isChecked }
             .setNegativeButton("취소", null)
             .setPositiveButton("선택") { _, _ ->
